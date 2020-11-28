@@ -1288,6 +1288,52 @@ func TestImportUserDefinedTypes(t *testing.T) {
 	}
 }
 
+func TestCreateView(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+	ctx := context.Background()
+	baseDir, cleanup := testutils.TempDir(t)
+	defer cleanup()
+	tc := testcluster.StartTestCluster(
+		t, 1, base.TestClusterArgs{ServerArgs: base.TestServerArgs{ExternalIODir: baseDir}})
+	defer tc.Stopper().Stop(ctx)
+	conn := tc.Conns[0]
+	sqlDB := sqlutils.MakeSQLRunner(conn)
+
+	var data string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			_, _ = w.Write([]byte(data))
+		}
+	}))
+	defer srv.Close()
+
+	t.Run("pgdump create view", func(t *testing.T) {
+
+		sqlDB.Exec(t, `DROP TABLE IF EXISTS t`)
+
+		// View v depends on table t.
+		data = `
+		CREATE TABLE t (a INT);  
+		INSERT INTO t VALUES (4); 
+		INSERT INTO t VALUES (5); 
+		CREATE VIEW v AS SELECT a FROM t WHERE a > 4;`
+
+		// Import table from dump format.
+		importDumpQuery := fmt.Sprintf(`IMPORT PGDUMP ($1)`)
+		sqlDB.Exec(t, importDumpQuery, srv.URL)
+
+		res := sqlDB.QueryStr(t, `SELECT * FROM t`)
+		fmt.Println(res)
+
+		res = sqlDB.QueryStr(t, `SELECT * FROM t`)
+		fmt.Println(res)
+		sqlDB.CheckQueryResults(t, `SELECT * FROM public`, [][]string{{"5"}})
+
+		sqlDB.Exec(t, `DROP TABLE t`)
+	})
+}
+
 func TestImportRowLimit(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	defer log.Scope(t).Close(t)

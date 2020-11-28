@@ -235,7 +235,7 @@ func (v virtualSchemaView) initVirtualTableDesc(
 	if len(create.ColumnNames) != 0 {
 		columns = overrideColumnNames(columns, create.ColumnNames)
 	}
-	mutDesc, err := makeViewTableDesc(
+	mutDesc, err := MakeViewTableDesc(
 		ctx,
 		create.Name.Table(),
 		tree.AsStringWithFlags(create.AsSource, tree.FmtParsable),

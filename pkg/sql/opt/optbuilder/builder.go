@@ -12,6 +12,7 @@ package optbuilder
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/cockroachdb/cockroach/pkg/sql/delegate"
 	"github.com/cockroachdb/cockroach/pkg/sql/opt"
@@ -286,6 +287,8 @@ func (b *Builder) buildStmt(
 		return b.buildCreateTable(stmt, inScope)
 
 	case *tree.CreateView:
+		fmt.Println("LOOK HERE")
+		fmt.Println(stmt.ColumnNames)
 		return b.buildCreateView(stmt, inScope)
 
 	case *tree.Explain:

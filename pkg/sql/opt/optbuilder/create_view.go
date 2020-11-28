@@ -11,6 +11,8 @@
 package optbuilder
 
 import (
+	"fmt"
+
 	"github.com/cockroachdb/cockroach/pkg/sql/opt/memo"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/sqlerrors"
@@ -39,11 +41,14 @@ func (b *Builder) buildCreateView(cv *tree.CreateView, inScope *scope) (outScope
 	}()
 
 	b.pushWithFrame()
+	fmt.Println(inScope)
 	defScope := b.buildStmtAtRoot(cv.AsSource, nil /* desiredTypes */, inScope)
 	b.popWithFrame(defScope)
+	fmt.Println(defScope)
 
 	p := defScope.makePhysicalProps().Presentation
 	if len(cv.ColumnNames) != 0 {
+		fmt.Println("THIS SHOULD NOT PRINT")
 		if len(p) != len(cv.ColumnNames) {
 			panic(sqlerrors.NewSyntaxErrorf(
 				"CREATE VIEW specifies %d column name%s, but data source has %d column%s",
@@ -56,6 +61,7 @@ func (b *Builder) buildCreateView(cv *tree.CreateView, inScope *scope) (outScope
 			p[i].Alias = string(cv.ColumnNames[i])
 		}
 	}
+	fmt.Println(p)
 
 	outScope = b.allocScope()
 	outScope.expr = b.factory.ConstructCreateView(

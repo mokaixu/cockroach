@@ -12,6 +12,7 @@ package execbuilder
 
 import (
 	"bytes"
+	"fmt"
 
 	"github.com/cockroachdb/cockroach/pkg/server/telemetry"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/colinfo"
@@ -51,6 +52,7 @@ func (b *Builder) buildCreateView(cv *memo.CreateViewExpr) (execPlan, error) {
 	md := b.mem.Metadata()
 	schema := md.Schema(cv.Schema)
 	cols := make(colinfo.ResultColumns, len(cv.Columns))
+	fmt.Println("THE NUMBER OF COLS IS  ", len(cv.Columns))
 	for i := range cols {
 		cols[i].Name = cv.Columns[i].Alias
 		cols[i].Typ = md.ColumnMeta(cv.Columns[i].ID).Type

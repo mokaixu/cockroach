@@ -29,6 +29,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
 	"github.com/cockroachdb/cockroach/pkg/sql/sqlerrors"
 	"github.com/cockroachdb/cockroach/pkg/sql/sqltelemetry"
+	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 )
@@ -160,7 +161,7 @@ func (n *createViewNode) startExec(params runParams) error {
 		// TODO(ajwerner): remove the timestamp from MakeViewTableDesc, it's
 		// currently relied on in import and restore code and tests.
 		var creationTime hlc.Timestamp
-		desc, err := makeViewTableDesc(
+		desc, err := MakeViewTableDesc(
 			params.ctx,
 			viewName,
 			n.viewQuery,
@@ -286,7 +287,7 @@ func (n *createViewNode) Close(ctx context.Context)  {}
 // dependencies in the same transaction that the view is created and it
 // doesn't matter if reads/writes use a cached descriptor that doesn't
 // include the back-references.
-func makeViewTableDesc(
+func MakeViewTableDesc(
 	ctx context.Context,
 	viewName string,
 	viewQuery string,
@@ -402,7 +403,7 @@ func addResultColumns(
 	resultColumns colinfo.ResultColumns,
 ) error {
 	for _, colRes := range resultColumns {
-		columnTableDef := tree.ColumnTableDef{Name: tree.Name(colRes.Name), Type: colRes.Typ}
+		columnTableDef := tree.ColumnTableDef{Name: tree.Name(colRes.Name), Type: types.Int}
 		// Nullability constraints do not need to exist on the view, since they are
 		// already enforced on the source data.
 		columnTableDef.Nullable.Nullability = tree.SilentNull

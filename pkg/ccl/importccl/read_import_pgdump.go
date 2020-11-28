@@ -36,6 +36,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/sql/row"
 	"github.com/cockroachdb/cockroach/pkg/sql/rowenc"
 	"github.com/cockroachdb/cockroach/pkg/sql/sem/tree"
+	"github.com/cockroachdb/cockroach/pkg/sql/types"
 	"github.com/cockroachdb/cockroach/pkg/storage/cloud"
 	"github.com/cockroachdb/cockroach/pkg/util"
 	"github.com/cockroachdb/cockroach/pkg/util/ctxgroup"
@@ -240,6 +241,7 @@ type schemaParsingObjects struct {
 	createTbl    map[schemaAndTableName]*tree.CreateTable
 	createSeq    map[schemaAndTableName]*tree.CreateSequence
 	tableFKs     map[schemaAndTableName][]*tree.ForeignKeyConstraintTableDef
+	createView   map[schemaAndTableName]*tree.CreateView
 }
 
 func createPostgresSchemas(
@@ -316,6 +318,100 @@ func createPostgresSequences(
 	}
 
 	return ret, nil
+}
+
+func createPostgresViews(
+	ctx context.Context,
+
+	evalCtx *tree.EvalContext,
+	p sql.JobExecContext,
+	createView map[schemaAndTableName]*tree.CreateView,
+	fks fkHandler,
+	backrefs map[descpb.ID]*tabledesc.Mutable,
+	parentID descpb.ID,
+	walltime int64,
+	schemaNameToDesc map[string]*schemadesc.Mutable) ([]*tabledesc.Mutable, error) {
+	ret := make([]*tabledesc.Mutable, 0, len(createView))
+
+	for _, viewStmt := range createView {
+
+		// taken from line 177 of create_table.go in getTableCreateParams()
+		id := getNextMockDescID()
+		viewName := viewStmt.Name.Table()
+		var schemaID descpb.ID = keys.PublicSchemaID
+
+		// md := b.mem.Metadata()
+		// schema := md.Schema(viewStmt.Schema)
+		cols := make(colinfo.ResultColumns, len(viewStmt.ColumnNames))
+
+		fmt.Println("VIEW STMT COLUMNNAMES ", len(viewStmt.ColumnNames), viewName)
+		for i := range cols {
+			cols[i].Name = viewStmt.ColumnNames[i].String()
+			cols[i].Typ = types.Int
+			// cols[i].Typ = md.ColumnMeta(viewStmt.Columns[i].ID).Type // not sure if this is possible on IMPORT
+		}
+
+		privs := descpb.NewDefaultPrivilegeDescriptor(security.AdminRoleName())
+
+		var creationTime hlc.Timestamp
+		viewQuery := tree.AsStringWithFlags(viewStmt.AsSource, tree.FmtParsable)
+		desc, err := sql.MakeViewTableDesc(
+			ctx,
+			viewName,  // n.Table.Table() is how create_table does it     //tree.MakeTableNameFromPrefix(resName, tree.Name(cv.Name.Object()))
+			viewQuery, // n.viewQuery, 			ViewQuery:    tree.AsStringWithFlags(cv.AsSource, tree.FmtParsable),
+			parentID,  // n.dbDesc.GetID(),   dbDesc = schema.(*optSchema).database,
+			schemaID,  // this i the publicschema id
+			id,        // this is temporary
+			cols,      // n.columns,
+			creationTime,
+			privs,
+			p.SemaCtx(),          // &params.p.semaCtx,
+			evalCtx,              // params.p.EvalContext(),
+			viewStmt.Persistence, // n.persistence,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		// if viewStmt.Materialized {
+		// 	// Ensure all nodes are the correct version.
+		// 	if !p.ExecCfg().Settings.Version.IsActive(ctx, clusterversion.VersionMaterializedViews) {
+		// 		return nil, pgerror.New(pgcode.FeatureNotSupported,
+		// 			"all nodes are not the correct version to use materialized views")
+		// 	}
+		// 	// If the view is materialized, set up some more state on the view descriptor.
+		// 	// In particular,
+		// 	// * mark the descriptor as a materialized view
+		// 	// * mark the state as adding and remember the AsOf time to perform
+		// 	//   the view query
+		// 	// * use AllocateIDs to give the view descriptor a primary key
+		// 	desc.IsMaterializedView = true
+		// 	desc.State = descpb.DescriptorState_ADD
+		// 	desc.CreateAsOfTime = evalCtx.Txn.ReadTimestamp() //p.Txn().ReadTimestamp()
+		// 	if err := desc.AllocateIDs(ctx); err != nil {
+		// 		return nil, err
+		// 	}
+		// }
+
+		// // // Collect all the tables/views this view depends on.
+		// for backrefID := range n.planDeps {
+		// 	desc.DependsOn = append(desc.DependsOn, backrefID)
+		// }
+
+		// TODO (lucy): I think this needs a NodeFormatter implementation. For now,
+		// do some basic string formatting (not accurate in the general case).
+
+		// if err = p.createDescriptorWithID(
+		// 	ctx, tKey.Key(p.ExecCfg().Codec), id, &desc, evalCtx.Settings,
+		// 	fmt.Sprintf("CREATE VIEW %q AS %q", name, viewQuery),
+		// ); err != nil {
+		// 	return err
+		// }
+		ret = append(ret, &desc)
+
+	}
+	return ret, nil
+
 }
 
 func createPostgresTables(
@@ -415,6 +511,7 @@ func readPostgresCreateTable(
 		createTbl:    make(map[schemaAndTableName]*tree.CreateTable),
 		createSeq:    make(map[schemaAndTableName]*tree.CreateSequence),
 		tableFKs:     make(map[schemaAndTableName][]*tree.ForeignKeyConstraintTableDef),
+		createView:   make(map[schemaAndTableName]*tree.CreateView),
 	}
 	ps := newPostgreStream(input, max)
 	for {
@@ -448,6 +545,14 @@ func readPostgresCreateTable(
 				return nil, nil, err
 			}
 			tables = append(tables, tableDescs...)
+			fmt.Println("there are this many create views ", len(schemaObjects.createView))
+			fmt.Println(schemaObjects.createView)
+			viewDescs, err := createPostgresViews(ctx, evalCtx, p, schemaObjects.createView, fks, backrefs,
+				parentID, walltime, schemaNameToDesc)
+			if err != nil {
+				return nil, nil, err
+			}
+			tables = append(tables, viewDescs...)
 
 			// Resolve FKs.
 			err = resolvePostgresFKs(evalCtx, schemaObjects.tableFKs, fks, backrefs)
@@ -494,6 +599,22 @@ func readPostgresStmt(
 			return err
 		}
 		schemaObjects.createSchema[name] = stmt
+
+	case *tree.CreateView:
+		schemaAndTableName, err := getSchemaAndTableName(&stmt.Name)
+		fmt.Println("THE SCHEMA AND TABLE NAME ARE ", schemaAndTableName)
+		if err != nil {
+			return err
+		}
+		schemaObjects.createView[schemaAndTableName] = stmt
+		if len(stmt.ColumnNames) == 0 {
+			names := stmt.AsSource.Select
+
+			// defScope := b.buildStmtAtRoot(stmt.AsSource, nil /* desiredTypes */, inScope)
+
+			// p := defScope.makePhysicalProps().Presentation
+			schemaObjects.createView[schemaAndTableName].ColumnNames = append(schemaObjects.createView[schemaAndTableName].ColumnNames, "a")
+		}
 	case *tree.CreateTable:
 		schemaAndTableName, err := getSchemaAndTableName(&stmt.Table)
 		if err != nil {
@@ -1076,7 +1197,7 @@ func (m *pgDumpReader) readFile(
 		case *tree.SetVar, *tree.BeginTransaction, *tree.CommitTransaction, *tree.Analyze:
 			// ignored.
 		case *tree.CreateTable, *tree.AlterTable, *tree.CreateIndex, *tree.CreateSequence,
-			*tree.CreateSchema, *tree.AlterSchema, *tree.DropTable:
+			*tree.CreateSchema, *tree.AlterSchema, *tree.DropTable, *tree.CreateView:
 			// handled during schema extraction.
 		case *tree.Delete:
 			switch stmt := i.Table.(type) {
